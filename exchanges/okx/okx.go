@@ -3,7 +3,6 @@ package okx
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -19,6 +18,7 @@ import (
 	"github.com/thrasher-corp/gocryptotrader/common"
 	"github.com/thrasher-corp/gocryptotrader/common/crypto"
 	"github.com/thrasher-corp/gocryptotrader/currency"
+	"github.com/thrasher-corp/gocryptotrader/encoding/json"
 	exchange "github.com/thrasher-corp/gocryptotrader/exchanges"
 	"github.com/thrasher-corp/gocryptotrader/exchanges/account"
 	"github.com/thrasher-corp/gocryptotrader/exchanges/asset"
@@ -5224,7 +5224,7 @@ func (ok *Okx) GetInsuranceFundInformation(ctx context.Context, arg *InsuranceFu
 }
 
 // CurrencyUnitConvert convert currency to contract, or contract to currency
-func (ok *Okx) CurrencyUnitConvert(ctx context.Context, instrumentID string, quantity, orderPrice float64, convertType uint, unitOfCcy currency.Code, operationTypeOpen bool) (*UnitConvertResponse, error) {
+func (ok *Okx) CurrencyUnitConvert(ctx context.Context, instrumentID string, quantity, orderPrice float64, convertType uint64, unitOfCcy currency.Code, operationTypeOpen bool) (*UnitConvertResponse, error) {
 	if instrumentID == "" {
 		return nil, errMissingInstrumentID
 	}
@@ -5238,7 +5238,7 @@ func (ok *Okx) CurrencyUnitConvert(ctx context.Context, instrumentID string, qua
 		params.Set("px", strconv.FormatFloat(orderPrice, 'f', 0, 64))
 	}
 	if convertType > 0 {
-		params.Set("type", strconv.Itoa(int(convertType)))
+		params.Set("type", strconv.FormatUint(convertType, 10))
 	}
 	switch unitOfCcy {
 	case currency.USDC, currency.USDT:
