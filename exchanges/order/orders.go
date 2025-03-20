@@ -2,10 +2,10 @@ package order
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -13,6 +13,7 @@ import (
 	"github.com/gofrs/uuid"
 	"github.com/thrasher-corp/gocryptotrader/common"
 	"github.com/thrasher-corp/gocryptotrader/currency"
+	"github.com/thrasher-corp/gocryptotrader/encoding/json"
 	"github.com/thrasher-corp/gocryptotrader/exchanges/asset"
 	"github.com/thrasher-corp/gocryptotrader/exchanges/protocol"
 	"github.com/thrasher-corp/gocryptotrader/exchanges/validate"
@@ -971,12 +972,11 @@ func FilterOrdersByPairs(orders *[]Detail, pairs []currency.Pair) {
 			continue
 		}
 
-		for y := range pairs {
-			if (*orders)[x].Pair.EqualIncludeReciprocal(pairs[y]) {
-				(*orders)[target] = (*orders)[x]
-				target++
-				break
-			}
+		if slices.ContainsFunc(pairs, func(p currency.Pair) bool {
+			return (*orders)[x].Pair.EqualIncludeReciprocal(p)
+		}) {
+			(*orders)[target] = (*orders)[x]
+			target++
 		}
 	}
 	*orders = (*orders)[:target]
@@ -1189,15 +1189,15 @@ func StringToOrderStatus(status string) (Status, error) {
 	switch status {
 	case AnyStatus.String():
 		return AnyStatus, nil
-	case New.String(), "PLACED", "ACCEPTED":
+	case New.String(), "PLACED", "ACCEPTED", "SUBMITTED":
 		return New, nil
 	case Active.String(), "STATUS_ACTIVE", "LIVE":
 		return Active, nil
-	case PartiallyFilled.String(), "PARTIALLY MATCHED", "PARTIALLY FILLED":
+	case PartiallyFilled.String(), "PARTIAL-FILLED", "PARTIALLY MATCHED", "PARTIALLY FILLED":
 		return PartiallyFilled, nil
 	case Filled.String(), "FULLY MATCHED", "FULLY FILLED", "ORDER_FULLY_TRANSACTED", "EFFECTIVE":
 		return Filled, nil
-	case PartiallyCancelled.String(), "PARTIALLY CANCELLED", "ORDER_PARTIALLY_TRANSACTED":
+	case PartiallyCancelled.String(), "PARTIAL-CANCELED", "PARTIALLY CANCELLED", "ORDER_PARTIALLY_TRANSACTED":
 		return PartiallyCancelled, nil
 	case PartiallyFilledCancelled.String(), "PARTIALLYFILLEDCANCELED":
 		return PartiallyFilledCancelled, nil

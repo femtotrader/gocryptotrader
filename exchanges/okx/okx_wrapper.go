@@ -181,6 +181,14 @@ func (ok *Okx) SetDefaults() {
 	ok.WebsocketResponseMaxLimit = websocketResponseMaxLimit
 	ok.WebsocketResponseCheckTimeout = websocketResponseMaxLimit
 	ok.WebsocketOrderbookBufferLimit = exchange.DefaultWebsocketOrderbookBufferLimit
+
+	ok.WsResponseMultiplexer = wsRequestDataChannelsMultiplexer{
+		WsResponseChannelsMap: make(map[string]*wsRequestInfo),
+		Register:              make(chan *wsRequestInfo),
+		Unregister:            make(chan string),
+		Message:               make(chan *wsIncomingData),
+		shutdown:              make(chan bool),
+	}
 }
 
 // Setup takes in the supplied exchange configuration details and sets params
@@ -194,14 +202,6 @@ func (ok *Okx) Setup(exch *config.Exchange) error {
 	}
 	if err := ok.SetupDefaults(exch); err != nil {
 		return err
-	}
-
-	ok.WsResponseMultiplexer = wsRequestDataChannelsMultiplexer{
-		WsResponseChannelsMap: make(map[string]*wsRequestInfo),
-		Register:              make(chan *wsRequestInfo),
-		Unregister:            make(chan string),
-		Message:               make(chan *wsIncomingData),
-		shutdown:              make(chan bool),
 	}
 
 	wsRunningEndpoint, err := ok.API.Endpoints.GetURL(exchange.WebsocketSpot)
@@ -519,28 +519,6 @@ func (ok *Okx) UpdateTickers(ctx context.Context, assetType asset.Item) error {
 	return nil
 }
 
-// FetchTicker returns the ticker for a currency pair
-func (ok *Okx) FetchTicker(ctx context.Context, p currency.Pair, assetType asset.Item) (*ticker.Price, error) {
-	formattedPair, err := ok.FormatExchangeCurrency(p, assetType)
-	if err != nil {
-		return nil, err
-	}
-	tickerNew, err := ticker.GetTicker(ok.Name, formattedPair, assetType)
-	if err != nil {
-		return ok.UpdateTicker(ctx, p, assetType)
-	}
-	return tickerNew, nil
-}
-
-// FetchOrderbook returns orderbook base on the currency pair
-func (ok *Okx) FetchOrderbook(ctx context.Context, pair currency.Pair, assetType asset.Item) (*orderbook.Base, error) {
-	ob, err := orderbook.Get(ok.Name, pair, assetType)
-	if err != nil {
-		return ok.UpdateOrderbook(ctx, pair, assetType)
-	}
-	return ob, nil
-}
-
 // UpdateOrderbook updates and returns the orderbook for a currency pair
 func (ok *Okx) UpdateOrderbook(ctx context.Context, pair currency.Pair, assetType asset.Item) (*orderbook.Base, error) {
 	if pair.IsEmpty() {
@@ -687,19 +665,6 @@ func (ok *Okx) UpdateAccountInfo(ctx context.Context, assetType asset.Item) (acc
 	return info, nil
 }
 
-// FetchAccountInfo retrieves balances for all enabled currencies
-func (ok *Okx) FetchAccountInfo(ctx context.Context, assetType asset.Item) (account.Holdings, error) {
-	creds, err := ok.GetCredentials(ctx)
-	if err != nil {
-		return account.Holdings{}, err
-	}
-	acc, err := account.GetHoldings(ok.Name, creds, assetType)
-	if err != nil {
-		return ok.UpdateAccountInfo(ctx, assetType)
-	}
-	return acc, nil
-}
-
 // GetAccountFundingHistory returns funding history, deposits and withdrawals
 func (ok *Okx) GetAccountFundingHistory(ctx context.Context) ([]exchange.FundingHistory, error) {
 	depositHistories, err := ok.GetCurrencyDepositHistory(ctx, currency.EMPTYCODE, "", "", "", "", time.Time{}, time.Time{}, -1, 0)
@@ -826,7 +791,7 @@ func (ok *Okx) GetRecentTrades(ctx context.Context, p currency.Pair, assetType a
 		return nil, fmt.Errorf("%w %v", asset.ErrNotSupported, assetType)
 	}
 	if ok.IsSaveTradeDataEnabled() {
-		err = trade.AddTradesToBuffer(ok.Name, resp...)
+		err = trade.AddTradesToBuffer(resp...)
 		if err != nil {
 			return nil, err
 		}
@@ -882,7 +847,7 @@ allTrades:
 		tradeIDEnd = trades[len(trades)-1].TradeID
 	}
 	if ok.IsSaveTradeDataEnabled() {
-		err = trade.AddTradesToBuffer(ok.Name, resp...)
+		err = trade.AddTradesToBuffer(resp...)
 		if err != nil {
 			return nil, err
 		}
@@ -959,7 +924,7 @@ func (ok *Okx) SubmitOrder(ctx context.Context, s *order.Submit) (*order.SubmitR
 	var result *AlgoOrder
 	switch orderTypeString {
 	case orderLimit, orderMarket, orderPostOnly, orderFOK, orderIOC, orderOptimalLimitIOC, "mmp", "mmp_and_post_only":
-		var orderRequest = &PlaceOrderRequestParam{
+		orderRequest := &PlaceOrderRequestParam{
 			InstrumentID:  pairString,
 			TradeMode:     tradeMode,
 			Side:          sideType,
@@ -2381,7 +2346,7 @@ func (ok *Okx) GetCollateralMode(ctx context.Context, item asset.Item) (collater
 	if err != nil {
 		return 0, err
 	}
-	switch cfg[0].AccountLevel {
+	switch cfg.AccountLevel {
 	case "1":
 		if item != asset.Spot {
 			return 0, fmt.Errorf("%w %v", asset.ErrNotSupported, item)
@@ -2394,7 +2359,7 @@ func (ok *Okx) GetCollateralMode(ctx context.Context, item asset.Item) (collater
 	case "4":
 		return collateral.PortfolioMode, nil
 	default:
-		return collateral.UnknownMode, fmt.Errorf("%w %v", order.ErrCollateralInvalid, cfg[0].AccountLevel)
+		return collateral.UnknownMode, fmt.Errorf("%w %v", order.ErrCollateralInvalid, cfg.AccountLevel)
 	}
 }
 
@@ -2513,13 +2478,11 @@ func (ok *Okx) GetFuturesPositionSummary(ctx context.Context, req *futures.Posit
 	if len(acc) != 1 {
 		return nil, fmt.Errorf("%w, received '%v'", errOnlyOneResponseExpected, len(acc))
 	}
-	var (
-		freeCollateral, totalCollateral, equityOfCurrency, frozenBalance,
+	var freeCollateral, totalCollateral, equityOfCurrency, frozenBalance,
 		availableEquity, cashBalance, discountEquity,
 		equityUSD, totalEquity, isolatedEquity, isolatedLiabilities,
 		isolatedUnrealisedProfit, notionalLeverage,
 		strategyEquity decimal.Decimal
-	)
 
 	for i := range acc[0].Details {
 		if !acc[0].Details[i].Currency.Equal(positionSummary.Currency) {
